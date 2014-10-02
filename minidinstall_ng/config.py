@@ -22,8 +22,6 @@ Description goes here
 #-----------------------------------------------------------------------------
 
 
-from collections import UserDict
-
 class ConfigHandler(dict):
     
     def __init__(self, defaults):
@@ -33,13 +31,11 @@ class ConfigHandler(dict):
         types, defaults = zip(*check_tuples)
         # repact 
         self._types = dict(zip(config_names, types))
-        dict.__init__(self, zip(config_names, defaults))
-
-    def 
+        dict.__init__(self, zip(config_names, defaults)) 
 
     def __getattr__(self, name):
-        if name[0] != '_':
-            return self[name]
+        if name[0] != '_' and name in self:
+            result = self[name]
         raise AttributeError(name)
 
     def __setattr__(self, item, value):
@@ -58,7 +54,8 @@ if __name__ == '__main__':
         def setUp(self):
             self.defaults = {
                 'name': (str, 'mini-dinstall'),
-                'version':(int, 0)
+                'version':(int, 0),
+                'required':(str, None)
             }
             self.ch = ConfigHandler(self.defaults)
 
@@ -82,4 +79,11 @@ if __name__ == '__main__':
             self.assertEqual(self.ch['version'], 1)
             self.assertEqual(self.ch.version, 1)
 
+        def test_unexisting(self):
+            def get_by_key():
+                return self.ch['unexisting']
+            def get_by_attr():
+                return self.ch.unexisting
+            self.assertRaises(KeyError, get_by_key)
+            self.assertRaises(AttributeError, get_by_attr)
     unittest.main()
