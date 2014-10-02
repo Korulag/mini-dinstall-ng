@@ -23,39 +23,38 @@ Description goes here
 
 import argparse
 from minidinstall_ng.config import ConfigHandler
-from minidinstall_ng import types
+from minidinstall_ng import config_types as types
+from minidinstall_ng.version import pkg_version
+import logging
+# to get the username:
+import getpass
+import os
 
 class MiniDinstall(object):
 
-	defaults = {
+    defaults = {
         'toplevel_directory':(str, None),
-        'log_level':(loglevel, logging.WARN),
+        'log_level':(types.loglevel, logging.WARN),
         'rejectdir':(str, 'REJECT'),
         'lockfilename':(str, 'mini-dinstall.lock'),
         'dinstall_subdir':(str, 'mini-dinstall'),
         'incoming_subdir':(str, 'incoming'),
         'socket_name':(str, 'master'),
         'logfile_name':(str, 'mini-dinstall.log'),
-        'use_dnotify':(bool, False),
-        'mail_on_success':(bool, True),
-        'tweet_on_success':(bool, False),
+        'use_dnotify':(types.str_bool, False),
+        'trigger_reindex':(int, 1),
+        'incoming_permissions':(types.IntWithBase(8), int('750', 8)),
+        'configfiles':(types.StrList(type=types.path), ['/etc/mini-dinstall.conf', '~/.mini-dinstall.conf']),
+        
+        'arches':(types.str_list, ('all', 'i386', 'amd64')),
+        'distributions':(types.str_list, ('unstable',)),
+        # 
+        'alias': (str, None),
         'poll_time':(int, 30),
         'max_retry_time':(int, 2 * 24 * 60 * 60),
-        'trigger_reindex':(int, 1),
-        'incoming_permissions':(types.IntWithBase(8), int(0750,8)),
-        'tweet_server':(str, 'identica'),
-        'tweet_user':(str, None),
-        'tweet_password':(str, None),
-        'tweet_template':(str, "Installed %(source)s %(version)s to %(distribution)s"),
-        'configfile_names':(types.str_list, ['/etc/mini-dinstall.conf', '~/.mini-dinstall.conf']),
-        'verify_sigs':(str, os.access('/usr/share/keyrings/debian-keyring.gpg', os.R_OK)),
-        'extra_keyrings':(types.str_list, []),
-        'keyrings':(types.str_list, None),
-        'architectures':(types.str_list, ('all', 'i386')),
-        'default_distributions':(types.str_list, ('unstable',)),
-        'distributions':(str, {}),
-        'mail_log_level':(loglevel, logging.ERROR),
-        'mail_log_flush_level':(loglevel, logging.ERROR),
+        'mail_on_success':(types.str_bool, True),
+        'mail_log_level':(types.loglevel, logging.ERROR),
+        'mail_log_flush_level':(types.loglevel, logging.ERROR),
         'mail_log_flush_count':(int, 10),
         'mail_to':(str, getpass.getuser()),
         'mail_server':(str, 'localhost'),
@@ -64,14 +63,39 @@ class MiniDinstall(object):
                                        'Maintainer: %(maintainer)s\n' + 
                                        'Changed-By: %(changed-by)s\n' +
                                        'Changes:\n' +
-                                       '%(changes_without_dot)s\n')
-        }
+                                       '%(changes_without_dot)s\n')),
+        'tweet_on_success':(types.str_bool, False),
+        'tweet_server':(str, 'identica'),
+        'tweet_user':(str, None),
+        'tweet_password':(str, None),
+        'tweet_template':(str, "Installed %(source)s %(version)s to %(distribution)s"),
+        'archive_style':(str, 'flat'),
+        'extra_keyrings':(types.str_list, ()),
+        'keyrings':(types.str_list, None),
+        'verify_sigs':(types.str_bool, os.access('/usr/share/keyrings/debian-keyring.gpg', os.R_OK)),
+        'post_install_script': (str, None),
+        'pre_install_script': (str, None),
+        'dynamic_reindex': (types.str_bool, True),
+        'chown_changes_files': (types.str_bool, True),
+        'keep_old': (types.str_bool, False),
+        'generate_release': (types.str_bool, False),
+        'release_origin': (str, getpass.getuser()),
+        'release_label': (str, getpass.getuser()),
+        'release_suite': (str, None),
+        'release_codename':  (str, None),
+        'experimental_release': (types.str_bool, 0),
+        'release_description': (str, None),
+        'release_signscript': (str, None)
+    }
 
     def __init__(self):
-        self.config = mdinst.ConfigHandler(self.defaults)
+        self.__dist_default = None
+        
 
     def main(self, args):
         arguments = self.parse_args(args)
+
+        config = ConfigHandler(self.defaults, additional_arguments=[arguments.config])
 
 
 

@@ -20,4 +20,4 @@ Description goes here
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #-----------------------------------------------------------------------------
-pgk_version = '0.0.1'
+pkg_version = '0.0.1'
