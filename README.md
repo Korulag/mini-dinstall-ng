@@ -25,7 +25,7 @@ to keep control over the code if we keep it clean and understandable.
 
 Differences to mini-dinstall
 ----------------------------
-* More options. See [the options section][General Options] for more information.
+* More options. See [the options section](#general-options) for more information.
 * If you want to define architectures in the section DEFAULT
   you have to name the option "arches" and not "architectures"
 
