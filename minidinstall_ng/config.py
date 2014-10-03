@@ -2,7 +2,8 @@
 # SignedFile -*- mode: python; coding: utf-8 -*-
 #-----------------------------------------------------------------------------
 '''
-Description goes here
+Simple configuration handler class creating an easy way to access the
+configuration.
 '''
 #-----------------------------------------------------------------------------
 # Copyright (C) 2014  c0ff3m4kr <l34k@bk.ru>

@@ -15,7 +15,7 @@ class StrList:
         return list(value)
 
 def path(value):
-    return os.path.abspath(os.path.expanduser(value))
+    return os.path.normpath(os.path.expanduser(value))
 
 # string list with default configuration
 str_list = StrList()
