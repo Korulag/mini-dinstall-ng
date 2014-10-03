@@ -44,9 +44,14 @@ SUCCESS = 0
 ERROR_CONFIG = 1
 ERROR_LOCK = 2
 ERROR_INV_LOCK = 3
-class EventSocketListener
 
 class MiniDinstall(object):
+    '''
+    The main mini-dinstall class.
+
+    If you just want to run the mini-dinstall you can call the 
+    :meth:`main()`.
+    '''
     defaults = {
         'archivedir':(str, None),
         'log_level':(types.loglevel, logging.WARN),
@@ -105,7 +110,7 @@ class MiniDinstall(object):
         'release_signscript': (str, None)
     }
 
-    def __init__(self,):
+    def __init__(self):
         self.__dist_default = None
 
         # These global variables are used in IncomingDir::daemonize

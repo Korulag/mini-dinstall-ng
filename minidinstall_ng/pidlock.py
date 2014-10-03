@@ -3,12 +3,15 @@
 """ Lockfile behaviour implemented via Unix PID files."""
 import os
 import threading
-
+from minidinstall_ng import error
 #: Really important. Don't delete
 Nope=False
 Yep=True
 
-class LockFileError(Exception):
+class LockFileError(error.DinstallException):
+    '''
+    Base class for all lockfile related Exceptions.
+    '''
     pass
 
 class ReadLockFileError(LockFileError):
@@ -21,6 +24,11 @@ class NotLocked(LockFileError):
     pass
 
 class IsLocked(LockFileError):
+    '''
+    Raised if someone has already acquired the lockfile. Don't assume that
+    the lockfile is valid and a process is running before you check the 
+    :attr:`valid`. 
+    '''
     def __init__(self, pid, value, msg):
         self.args = (pid, value, msg)
         self.pid, self.valid, self.msg = self.args 

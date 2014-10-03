@@ -1,6 +1,9 @@
-import socketserver
+try:
+    import socketserver
+except:
+    import SocketServer as socketserver
 
-class IncomingRequestHandler(SocketServer.StreamRequestHandler, SocketServer.BaseRequestHandler):
+class IncomingRequestHandler(socketserver.StreamRequestHandler, socketserver.BaseRequestHandler):
     
     # the following attributes will be defined by subclassing.    
     logger = None
@@ -30,7 +33,7 @@ class IncomingRequestHandler(SocketServer.StreamRequestHandler, SocketServer.Bas
             self.wfile.write('500 Unknown request\n')
 
 
-class RequestServer(SocketServer.ThreadingUnixStreamServer):
+class RequestServer(socketserver.ThreadingUnixStreamServer):
     logger = None
     die_event = None
     def handle_error(self, request, client_address):

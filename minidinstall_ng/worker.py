@@ -27,9 +27,9 @@ him the credits and blame me <l34k@bk.ru> for bugs.
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #-----------------------------------------------------------------------------
 
-import threading
+from minidinstall_ng.error import DinstallException
 
-for c in 
+import threading
 
 class IncomingDir(threading.Thread):
     def __init__(self, dir, archivemap, logger, trigger_reindex=1, poll_time=30, max_retry_time=172800, batch_mode=0):

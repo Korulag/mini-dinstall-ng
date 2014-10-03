@@ -21,8 +21,12 @@ configuration.
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #-----------------------------------------------------------------------------
-import configparser
-from configparser import ConfigParser
+try:
+    import configparser
+except ImportError:
+    # hopefully this helps :/
+    import ConfigParser as configparser
+
 import logging
 import collections
 
@@ -51,7 +55,7 @@ class ConfigHandler(object):
                      (e.g 'rootfolder')  as names and a tuple containing the
                      type (callable object to convert a value into a given 
                      type) and the default value as values.
-    :param config_parser: A :class`configparser.ConfigParser` object with
+    :param config_parser: A :class`configparser.configparser.ConfigParser` object with
                           the config files already read.
     '''
     def __init__(self, defaults, additional_files=None, logger=None):
@@ -62,7 +66,7 @@ class ConfigHandler(object):
         types, defaults = zip(*check_tuples)
         self._types = dict(zip(config_names, types))
         self._mappers = {}
-        self._configp = ConfigParser()
+        self._configp = configparser.ConfigParser()
         self._defaults = dict(zip(config_names, defaults))
 
         config_files = []
