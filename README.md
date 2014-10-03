@@ -1,3 +1,5 @@
+**WARNING** This software is not working yet! 
+
 # mini-dinstall-ng
 
 An unofficial mini-dinstall replacement with focus on the following things:
