@@ -21,8 +21,8 @@
 import os, re, sys, string, stat
 import threading, Queue
 import logging
-from minidinstall import DpkgControl, SignedFile
-from minidinstall import misc
+from minidinstall_ng import DpkgControl, SignedFile
+from minidinstall_ng import misc
 
 class ChangeFileException(Exception):
     def __init__(self, value):
@@ -45,6 +45,11 @@ class ChangeFile(DpkgControl.DpkgParagraph):
         f = SignedFile.SignedFile(open(self._file))
         self.load(f)
         f.close()
+
+    @classmethod
+    def from_file(cls, filename):
+        obj = cls()
+        obj.load_from_file(filename)
 
     def getFiles(self):
         return self._get_checksum_from_changes()['md5']

@@ -30,6 +30,7 @@ him the credits and blame me <l34k@bk.ru> for bugs.
 from minidinstall_ng.error import DinstallException
 from minidinstall_ng import sockethandler
 from minidinstall_ng import commands
+from minidinstall_ng.ChangeFile import ChangeFile
 import threading
 try:
     import queue
@@ -60,6 +61,8 @@ class IncomingDir(threading.Thread):
         self._max_retry_time = max_retry_time
         self._last_failed_targets = {}
         self._eventqueue = queue.Queue()
+        #: fucked packages. yup. fucked. 
+        self.fucked = []
         # ensure we always have some reprocess queue
         self._reprocess_queue = {}
         self.reprocess_needed = threading.Event()
@@ -74,20 +77,20 @@ class IncomingDir(threading.Thread):
         self._logger.info('Created new installer thread (%s)' % (self.getName(),))
         self._logger.info('Entering batch mode...')
         initial_reprocess_queue = []
-        initial_fucked_list = []
+        initial_self.fucked_list = []
         try:
-            for (changefilename, changefile) in self._get_changefiles():
+            for changefilename, changefile in self._get_changefiles():
                 if self._changefile_ready(changefilename, changefile):
                     try:
-                        self._install_changefile(changefilename, changefile, 0)
+                        self._install_changefile(changefilename, changefile, False)
                     except Exception:
                         self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
-                        initial_fucked_list.append(changefilename)
+                        initial_self.fucked_list.append(changefilename)
                 else:
                     self._logger.warn('Skipping "%s"; upload incomplete' % (changefilename,))
                     initial_reprocess_queue.append(changefilename)
             if not self._batch_mode:
-                self._daemonize(initial_reprocess_queue, initial_fucked_list)
+                self._daemonize(initial_reprocess_queue, initial_self.fucked_list)
             self._done_event.set()
             self._logger.info('All packages in incoming dir installed; exiting')
         except Exception as e:
@@ -97,25 +100,25 @@ class IncomingDir(threading.Thread):
             return 0
 
     def _abspath(self, *args):
-        return os.path.abspath(apply(os.path.join, [self._dir] + list(args)))
+        args = [self._dir] + list(args)
+        return os.path.abspath(os.path.join(*args))
 
     def _get_changefiles(self):
         ret = []
-        globpath = self._abspath("*.changes")
-        self._logger.debug("glob: " + globpath)
-        changefilenames = glob.glob(globpath)
-        for changefilename in changefilenames:
-            if not self._reprocess_queue.has_key(changefilename):
+        for changefilename in os.listdir(self._dir):
+            if not changefilename.endswith('.changes'):
+                continue
+            changefilename = os.path.join(self._dir, changefilename)
+            if not changefilename in self._reprocess_queue:
                 self._logger.info('Examining "%s"' % (changefilename,))
-                changefile = ChangeFile()
                 try:
-                    changefile.load_from_file(changefilename)
+                    ChangeFile.from_file(changefilename)
                 except ChangeFileException:
                     self._logger.debug("Unable to parse \"%s\", skipping" % (changefilename,))
                     continue
-                ret.append((changefilename, changefile))
+                yield (changefilename, changefile)
             else:
-                self._logger.debug('Skipping "%s" during new scan because it is in the reprocess queue.' % (changefilename,))
+                self._logger.debug('Skipping "%s" during new scan because it\'s already in the reprocess queue.' % (changefilename,))
         return ret
 
     def _changefile_ready(self, changefilename, changefile):
@@ -130,7 +133,7 @@ class IncomingDir(threading.Thread):
             return 0
         return 1
 
-    def _install_changefile(self, changefilename, changefile, doing_reprocess):
+    def _install_changefile(self, changefilename, changefile, doing_reprocess=False):
         changefiledist = changefile['distribution']
         for dist in distributions.keys():
             distributions[dist] = distoptionhandler.get_option_map(dist)
@@ -187,9 +190,68 @@ class IncomingDir(threading.Thread):
         '''
         self._task_queue.put(commands.RUN)
 
-    def _daemonize(self, init_reprocess_queue, init_fucked_list):
+    def _search_new_packages(self):
+        for (changefilename, changefile) in self._get_changefiles():
+            if changefilename in self.fucked:
+                self._logger.warn("Skipping screwed changefile \"%s\"" % (changefilename,))
+                continue
+            # Have we tried this changefile before?
+            if changefilename in self._reprocess_queue:
+                continue
+            self._logger.debug('New change file "%s"' % (changefilename,))
+            if self._changefile_ready(changefilename, changefile):
+                try:
+                    self._install_changefile(changefilename, changefile, doing_reprocess)
+                except Exception as e:
+                    self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
+                    self.fucked.append(changefilename)
+            else:
+                curtime = time.time()
+                self._logger.info('Upload "%s" isn\'t complete; marking for retry in %d seconds' % (changefilename, retry_time))
+                self._reprocess_queue[changefilename] = (curtime, curtime + retry_time, retry_time)
+            
+    def _reprocess_packages(self):
+        for changefilename, (starttime, nexttime, delay) in self._reprocess_queue.items():
+            curtime = time.time()
+            try:
+                changefile = ChangeFile.from_file(changefilename)
+            except (ChangeFileException, IOError) as e:
+                if not os.path.isfile(changefilename):
+                    self._logger.info('Changefile "%s" got removed' % (changefilename,))
+                else:
+                    self._logger.exception("Unable to load change file \"%s\"" % (changefilename,))
+                    self._logger.warn("Marking \"%s\" as screwed" % (changefilename,))
+                    self.fucked.append(changefilename)
+                    # TODO: Handle the screwed change file?
+                del self._reprocess_queue[changefilename]
+                # process the next change file
+                continue
+            if (curtime - starttime) > self._max_retry_time:
+                # We've tried too many times; reject it.
+                self._reject_changefile(changefilename, changefile, DinstallException("Couldn't install \"%s\" in %d seconds" % (changefilename, self._max_retry_time)))
+            elif curtime >= nexttime:
+                if self._changefile_ready(changefilename, changefile):
+                    # Let's do it!
+                    self._logger.debug('Preparing to install "%s"' % (changefilename,))
+                    try:
+                        self._install_changefile(changefilename, changefile, doing_reprocess)
+                        self._logger.debug('Removing "%s" from incoming queue after successful install.' % (changefilename,))
+                        del self._reprocess_queue[changefilename]
+                    except:
+                        self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
+                        self.fucked.append(changefilename)
+                else:
+                    delay *= 2
+                    if delay > 60 * 60:
+                        delay = 60 * 60
+                    self._logger.info('Upload "%s" isn\'t complete; marking for retry in %d seconds' % (changefilename, delay))
+                    # set next time and delay
+                    self._reprocess_queue[changefilename] = (starttime, curtime + delay, delay)
+
+
+    def _daemonize(self, init_reprocess_queue, init_self.fucked_list):
         '''
-        Enter the 
+        Enter the .. void?
         '''
         self._logger.info('Entering daemon mode...')
         self._dnotify = DirectoryNotifierFactory().create([self._dir], use_dnotify=use_dnotify, poll_time=self._poll_time, cancel_event=self._die_event)
@@ -204,8 +266,8 @@ class IncomingDir(threading.Thread):
         self._server.server_forever()
         retry_time = 30
         self._reprocess_queue = {}
-        fucked = init_fucked_list
-        doing_reprocess = 0
+        self.fucked = init_self.fucked_list
+        doing_reprocess = False
         # Initialize the reprocessing queue
         for changefilename in init_reprocess_queue:
             curtime = time.time()
@@ -245,75 +307,27 @@ class IncomingDir(threading.Thread):
 
             self._logger.debug('Scanning for changes')
             # do we have anything to reprocess?
-            for changefilename in self._reprocess_queue.keys():
-                (starttime, nexttime, delay) = self._reprocess_queue[changefilename]
-                curtime = time.time()
-                try:
-                    changefile = ChangeFile()
-                    changefile.load_from_file(changefilename)
-                except (ChangeFileException, IOError) as e:
-                    if not os.path.isfile(changefilename):
-                        self._logger.info('Changefile "%s" got removed' % (changefilename,))
-                    else:
-                        self._logger.exception("Unable to load change file \"%s\"" % (changefilename,))
-                        self._logger.warn("Marking \"%s\" as screwed" % (changefilename,))
-                        fucked.append(changefilename)
-                    del self._reprocess_queue[changefilename]
-                    continue
-                if (curtime - starttime) > self._max_retry_time:
-                    # We've tried too many times; reject it.
-                    self._reject_changefile(changefilename, changefile, DinstallException("Couldn't install \"%s\" in %d seconds" % (changefilename, self._max_retry_time)))
-                elif curtime >= nexttime:
-                    if self._changefile_ready(changefilename, changefile):
-                        # Let's do it!
-                        self._logger.debug('Preparing to install "%s"' % (changefilename,))
-                        try:
-                            self._install_changefile(changefilename, changefile, doing_reprocess)
-                            self._logger.debug('Removing "%s" from incoming queue after successful install.' % (changefilename,))
-                            del self._reprocess_queue[changefilename]
-                        except Exception as e:
-                            self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
-                            fucked.append(changefilename)
-                    else:
-                        delay *= 2
-                        if delay > 60 * 60:
-                            delay = 60 * 60
-                        self._logger.info('Upload "%s" isn\'t complete; marking for retry in %d seconds' % (changefilename, delay))
-                        self._reprocess_queue[changefilename][1:3] = [time.time() + delay, delay]
+            self._reprocess_packages()
             # done reprocessing; now scan for changed dirs.
-            relname = None
+            
+
             self._logger.debug('Checking dnotify event queue')
-            if not self._eventqueue.empty():
-                relname = os.path.basename(os.path.abspath(self._eventqueue.get()))
-                self._logger.debug('Got %s from dnotify' % (relname,))
-            if relname is None:
-                if (not doing_reprocess) and reprocess_needed.isSet():
-                    self._logger.info('Got reprocessing event')
-                    reprocess_needed.clear()
-                    doing_reprocess = 1
-            if relname is None and (not doing_reprocess):
+
+            relname = None
+            try:
+                name = self._eventqueue.get()
+            except queue.Empty:
                 self._logger.debug('No events to process')
                 continue
+            else:
+                relname = os.path.basename(os.path.abspath(name))
+                self._logger.debug('Got %s from dnotify' % (relname,))
 
-            for (changefilename, changefile) in self._get_changefiles():
-                if changefilename in fucked:
-                    self._logger.warn("Skipping screwed changefile \"%s\"" % (changefilename,))
-                    continue
-                # Have we tried this changefile before?
-                if not self._reprocess_queue.has_key(changefilename):
-                    self._logger.debug('New change file "%s"' % (changefilename,))
-                    if self._changefile_ready(changefilename, changefile):
-                        try:
-                            self._install_changefile(changefilename, changefile, doing_reprocess)
-                        except Exception as e:
-                            self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
-                            fucked.append(changefilename)
-                    else:
-                        curtime = time.time()
-                        self._logger.info('Upload "%s" isn\'t complete; marking for retry in %d seconds' % (changefilename, retry_time))
-                        self._reprocess_queue[changefilename] = [curtime, curtime + retry_time, retry_time]
+            self._search_new_packages()
+
+
             if doing_reprocess:
-                doing_reprocess = 0
+                doing_reprocess = False
                 self._logger.info('Reprocessing complete')
                 self._server.reprocess_done.set()
 
