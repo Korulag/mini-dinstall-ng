@@ -1,41 +1,31 @@
+import threading
+from minidinstall_ng.commands import COMMANDS
 try:
     import socketserver
 except:
     import SocketServer as socketserver
 
 class IncomingRequestHandler(socketserver.StreamRequestHandler, socketserver.BaseRequestHandler):
-    
-    # the following attributes will be defined by subclassing.    
-    logger = None
-    reprocess_lock = None
-    die_event = None
-    reprocess_finished = None
-    reprocess_needed = None
+    def __init__(self, *args, **kwargs):
+        super(IncomingRequestHandler, self).__init__(*args, **kwargs)
+
+    task_queue = None
+
     def handle(self):
         self.logger.debug('Got request from %s' % (self.client_address,))
         req = self.rfile.readline()
-        if req == 'RUN\n':
-            logger.debug('Doing RUN command')
-            reprocess_lock.acquire()
-            reprocess_needed.set()
-            logger.debug('Waiting on reprocessing')
-            # wait until reprocess completed
-            reprocess_finished.wait()
-            reprocess_finished.clear()
-            reprocess_lock.release()
-            self.wfile.write('200 Reprocessing complete\n')
-        elif req == 'DIE\n':
-            self.logger.debug('Doing DIE command')
-            self.wfile.write('200 Beginning shutdown\n')
-            die_event.set()
+        if req[:-1] in COMMANDS:
+            self.logger.info("Got %r command" % req)
+            self.task_queue.put()
         else:
-            self.logger.debug('Got unknown command %s' % (req,))
+            self.logger.info('Got unknown command %s' % (req,))
             self.wfile.write('500 Unknown request\n')
 
 
-class RequestServer(socketserver.ThreadingUnixStreamServer):
+class RequestServer(socketserver.UnixStreamServer, socketserver.ThreadingMixIn):
     logger = None
     die_event = None
+    daemon_threads = True
     def handle_error(self, request, client_address):
-        self._logger.exception("Unhandled exception during request processing; shutting down")
-        die_event.set()
+        self.logger.exception("Unhandled exception during request processing; shutting down")
+        self.die_event.set()

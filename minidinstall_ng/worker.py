@@ -29,7 +29,12 @@ him the credits and blame me <l34k@bk.ru> for bugs.
 
 from minidinstall_ng.error import DinstallException
 from minidinstall_ng import sockethandler
+from minidinstall_ng import commands
 import threading
+try:
+    import queue
+except ImportError:
+    import Queue as queue
 
 class IncomingDir(threading.Thread):
     '''
@@ -54,13 +59,13 @@ class IncomingDir(threading.Thread):
         self._batch_mode = batch_mode
         self._max_retry_time = max_retry_time
         self._last_failed_targets = {}
-        self._eventqueue = Queue.Queue()
-        self._done_event = threading.Event()
+        self._eventqueue = queue.Queue()
         # ensure we always have some reprocess queue
         self._reprocess_queue = {}
-        #: This event is set when the reprocessing of this 
-        #: incoming directory has finished.
-        self.reprocess_finished = threading.Event()
+        self.reprocess_needed = threading.Event()
+        self._done_event = threading.Event()
+        self._task_queue = queue.Queue()
+        self._reprocess_event = threading.Event()
 
     def run(self):
         '''
@@ -85,7 +90,7 @@ class IncomingDir(threading.Thread):
                 self._daemonize(initial_reprocess_queue, initial_fucked_list)
             self._done_event.set()
             self._logger.info('All packages in incoming dir installed; exiting')
-        except Exception, e:
+        except Exception as e:
             self._logger.exception("Unhandled exception; shutting down")
             self._die_event.set()
             self._done_event.set()
@@ -116,7 +121,7 @@ class IncomingDir(threading.Thread):
     def _changefile_ready(self, changefilename, changefile):
         try:
             dist = changefile['distribution']
-        except KeyError, e:
+        except KeyError as e:
             self._logger.warn("Unable to read distribution field for \"%s\"; data: %s" % (changefilename, changefile,))
             return 0
         try:
@@ -156,12 +161,10 @@ class IncomingDir(threading.Thread):
     def _get_socket_server(self, socket_name):
         data = {}
         data['logger'] = self._logger
-        data['self._die_event'] = self.self._die_event
+        data['die_event'] = self._die_event
         Server = type('MyIncomingSocketServer', (sockethandler.RequestServer,), data)
-        data['reprocess_lock'] = self.reprocess_lock
-        data['reprocess_finished'] = self.reprocess_finished
         Handler = type('MyIncomingRequestHandler', (sockethandler.IncomingRequestHandler,), data)
-        server = Server(socket_name, Handler)
+        return Server(socket_name, Handler)
 
     def _daemon_server_isready(self):
         (inready, outready, exready) = select.select([self._server.fileno()], [], [], 0)
@@ -170,7 +173,7 @@ class IncomingDir(threading.Thread):
     def _daemon_event_ispending(self):
         return self._die_event.isSet() or reprocess_needed.isSet() or self._daemon_server_isready() or (not self._eventqueue.empty())
 
-    def _daemon_reprocess_pending(self):
+    def _daemon_its_time_to_reprocess(self):
         curtime = time.time()
         for changefilename in self._reprocess_queue.keys():
             (starttime, nexttime, delay) = self._reprocess_queue[changefilename]
@@ -178,17 +181,27 @@ class IncomingDir(threading.Thread):
                 return 1
         return 0
 
+    def reprocess(self):
+        '''
+        Trigger reprocessing
+        '''
+        self._task_queue.put(commands.RUN)
+
     def _daemonize(self, init_reprocess_queue, init_fucked_list):
+        '''
+        Enter the 
+        '''
         self._logger.info('Entering daemon mode...')
         self._dnotify = DirectoryNotifierFactory().create([self._dir], use_dnotify=use_dnotify, poll_time=self._poll_time, cancel_event=self._die_event)
         self._async_dnotify = DirectoryNotifierAsyncWrapper(self._dnotify, self._eventqueue, logger=self._logger, name="Incoming watcher")
         self._async_dnotify.start()
         try:
             os.unlink(socket_name)
-        except EnvironmentError, e:
+        except EnvironmentError as e:
             pass
         self._server = self._get_socket_server(socket_name)
         self._server.allow_reuse_address = 1
+        self._server.server_forever()
         retry_time = 30
         self._reprocess_queue = {}
         fucked = init_fucked_list
@@ -200,19 +213,35 @@ class IncomingDir(threading.Thread):
 
         # The main daemon loop
         while 1:
-            # Wait until we have something to do
-            while not (self._daemon_event_ispending() or self._daemon_reprocess_pending()):
-                time.sleep(0.5)
+            if not self._daemon_server_isready():
+                self._logger.debug("daemon server not ready")
+            
+            # handle text commands (from socket server)
+            try:
+                task = self._task_queue.get_nowait()
+            except queue.Empty:
+                # no commands
+                if self._daemon_its_time_to_reprocess():
+                    self._reprocess_event.set()
+            else:
+                if task == commands.RUN:
+                    self._reprocess_event.set()
+                    pass
+                elif task == commands.DIE:
+                    self._logger.debug('DIE command caught.')
+                    self._die_event.set()
 
-            self._logger.debug('Checking for pending server requests')
-            if self._daemon_server_isready():
-                self._logger.debug('Handling one request')
-                self._server.handle_request()
-
-            self._logger.debug('Checking for DIE event')
-            if self._die_event.isSet():
-                self._logger.debug('DIE event caught')
+            # handle events
+            if self._die_event.is_set():
+                self._logger.debug('DIE event caught. Shutting down server...')
+                self._server.shutdown()
+                self._logger.debug("Server shut down. Quitting.")
                 break
+
+            if not self._reprocess_event.is_set():
+                time.sleep(0.5)
+                continue
+
 
             self._logger.debug('Scanning for changes')
             # do we have anything to reprocess?
@@ -222,8 +251,8 @@ class IncomingDir(threading.Thread):
                 try:
                     changefile = ChangeFile()
                     changefile.load_from_file(changefilename)
-                except (ChangeFileException,IOError), e:
-                    if not os.path.exists(changefilename):
+                except (ChangeFileException, IOError) as e:
+                    if not os.path.isfile(changefilename):
                         self._logger.info('Changefile "%s" got removed' % (changefilename,))
                     else:
                         self._logger.exception("Unable to load change file \"%s\"" % (changefilename,))
@@ -242,7 +271,7 @@ class IncomingDir(threading.Thread):
                             self._install_changefile(changefilename, changefile, doing_reprocess)
                             self._logger.debug('Removing "%s" from incoming queue after successful install.' % (changefilename,))
                             del self._reprocess_queue[changefilename]
-                        except Exception, e:
+                        except Exception as e:
                             self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
                             fucked.append(changefilename)
                     else:
@@ -276,7 +305,7 @@ class IncomingDir(threading.Thread):
                     if self._changefile_ready(changefilename, changefile):
                         try:
                             self._install_changefile(changefilename, changefile, doing_reprocess)
-                        except Exception, e:
+                        except Exception as e:
                             self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
                             fucked.append(changefilename)
                     else:
@@ -286,7 +315,7 @@ class IncomingDir(threading.Thread):
             if doing_reprocess:
                 doing_reprocess = 0
                 self._logger.info('Reprocessing complete')
-                self.reprocess_finished.set()
+                self._server.reprocess_done.set()
 
     def wait(self):
         self._done_event.wait()
