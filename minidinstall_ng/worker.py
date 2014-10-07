@@ -28,12 +28,24 @@ him the credits and blame me <l34k@bk.ru> for bugs.
 #-----------------------------------------------------------------------------
 
 from minidinstall_ng.error import DinstallException
-
+from minidinstall_ng import sockethandler
 import threading
 
 class IncomingDir(threading.Thread):
-    def __init__(self, dir, archivemap, logger, trigger_reindex=1, poll_time=30, max_retry_time=172800, batch_mode=0):
+    '''
+    Worker which keeps control over a single incoming folder.
+    :param dir: The directory to listen on
+    :param archivemap: whut config?
+    :param die_event: :class:`threading.Event` which is set when a unhandled
+                      error occurs.
+    :param logger: The logger to use.
+    :param trigger_reindex: Whether or not to trigger a reindex.
+    '''
+    def __init__(self, dir, archivemap, die_event, logger, trigger_reindex=1,
+                 poll_time=30, max_retry_time=172800, batch_mode=0):
         threading.Thread.__init__(self, name="incoming")
+
+        self._die_event = die_event
         self._dir = dir
         self._archivemap = archivemap
         self._logger = logger
@@ -46,8 +58,14 @@ class IncomingDir(threading.Thread):
         self._done_event = threading.Event()
         # ensure we always have some reprocess queue
         self._reprocess_queue = {}
+        #: This event is set when the reprocessing of this 
+        #: incoming directory has finished.
+        self.reprocess_finished = threading.Event()
 
     def run(self):
+        '''
+        The actual thread functionality.
+        '''
         self._logger.info('Created new installer thread (%s)' % (self.getName(),))
         self._logger.info('Entering batch mode...')
         initial_reprocess_queue = []
@@ -58,7 +76,7 @@ class IncomingDir(threading.Thread):
                     try:
                         self._install_changefile(changefilename, changefile, 0)
                     except Exception:
-                        logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
+                        self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
                         initial_fucked_list.append(changefilename)
                 else:
                     self._logger.warn('Skipping "%s"; upload incomplete' % (changefilename,))
@@ -69,7 +87,7 @@ class IncomingDir(threading.Thread):
             self._logger.info('All packages in incoming dir installed; exiting')
         except Exception, e:
             self._logger.exception("Unhandled exception; shutting down")
-            die_event.set()
+            self._die_event.set()
             self._done_event.set()
             return 0
 
@@ -112,22 +130,22 @@ class IncomingDir(threading.Thread):
         for dist in distributions.keys():
             distributions[dist] = distoptionhandler.get_option_map(dist)
             if distributions[dist]['alias'] != None and changefiledist in distributions[dist]['alias']:
-                logger.info('Distribution "%s" is an alias for "%s"' % (changefiledist, dist))
+                self._logger.info('Distribution "%s" is an alias for "%s"' % (changefiledist, dist))
                 break
             else:
                 dist = changefiledist
         if not dist in self._archivemap.keys():
             raise DinstallException('Unknown distribution "%s" in \"%s\"' % (dist, changefilename,))
-        logger.debug('Installing %s in archive %s' % (changefilename, self._archivemap[dist][1].getName()))
+        self._logger.debug('Installing %s in archive %s' % (changefilename, self._archivemap[dist][1].getName()))
         self._archivemap[dist][0].install(changefilename, changefile)
         if self._trigger_reindex:
             if doing_reprocess:
-                logger.debug('Waiting on archive %s to reprocess' % (self._archivemap[dist][1].getName()))
+                self._logger.debug('Waiting on archive %s to reprocess' % (self._archivemap[dist][1].getName()))
                 self._archivemap[dist][1].wait_reprocess()
             else:
-                logger.debug('Notifying archive %s of change' % (self._archivemap[dist][1].getName()))
+                self._logger.debug('Notifying archive %s of change' % (self._archivemap[dist][1].getName()))
                 self._archivemap[dist][1].notify()
-            logger.debug('Finished processing %s' % (changefilename))
+            self._logger.debug('Finished processing %s' % (changefilename))
 
     def _reject_changefile(self, changefilename, changefile, e):
         dist = changefile['distribution']
@@ -135,12 +153,22 @@ class IncomingDir(threading.Thread):
             raise DinstallException('Unknown distribution "%s" in \"%s\"' % (dist, changefilename,))
         self._archivemap[dist][0].reject(changefilename, changefile, e)
 
+    def _get_socket_server(self, socket_name):
+        data = {}
+        data['logger'] = self._logger
+        data['self._die_event'] = self.self._die_event
+        Server = type('MyIncomingSocketServer', (sockethandler.RequestServer,), data)
+        data['reprocess_lock'] = self.reprocess_lock
+        data['reprocess_finished'] = self.reprocess_finished
+        Handler = type('MyIncomingRequestHandler', (sockethandler.IncomingRequestHandler,), data)
+        server = Server(socket_name, Handler)
+
     def _daemon_server_isready(self):
         (inready, outready, exready) = select.select([self._server.fileno()], [], [], 0)
         return len(inready) > 0
 
     def _daemon_event_ispending(self):
-        return die_event.isSet() or reprocess_needed.isSet() or self._daemon_server_isready() or (not self._eventqueue.empty())
+        return self._die_event.isSet() or reprocess_needed.isSet() or self._daemon_server_isready() or (not self._eventqueue.empty())
 
     def _daemon_reprocess_pending(self):
         curtime = time.time()
@@ -152,14 +180,14 @@ class IncomingDir(threading.Thread):
 
     def _daemonize(self, init_reprocess_queue, init_fucked_list):
         self._logger.info('Entering daemon mode...')
-        self._dnotify = DirectoryNotifierFactory().create([self._dir], use_dnotify=use_dnotify, poll_time=self._poll_time, cancel_event=die_event)
+        self._dnotify = DirectoryNotifierFactory().create([self._dir], use_dnotify=use_dnotify, poll_time=self._poll_time, cancel_event=self._die_event)
         self._async_dnotify = DirectoryNotifierAsyncWrapper(self._dnotify, self._eventqueue, logger=self._logger, name="Incoming watcher")
         self._async_dnotify.start()
         try:
             os.unlink(socket_name)
-        except OSError, e:
+        except EnvironmentError, e:
             pass
-        self._server = ExceptionThrowingThreadedUnixStreamServer(socket_name, IncomingDirRequestHandler)
+        self._server = self._get_socket_server(socket_name)
         self._server.allow_reuse_address = 1
         retry_time = 30
         self._reprocess_queue = {}
@@ -168,7 +196,7 @@ class IncomingDir(threading.Thread):
         # Initialize the reprocessing queue
         for changefilename in init_reprocess_queue:
             curtime = time.time()
-            self._reprocess_queue[changefilename] = [curtime, curtime, retry_time]
+            self._reprocess_queue[changefilename] = (curtime, curtime, retry_time)
 
         # The main daemon loop
         while 1:
@@ -182,7 +210,7 @@ class IncomingDir(threading.Thread):
                 self._server.handle_request()
 
             self._logger.debug('Checking for DIE event')
-            if die_event.isSet():
+            if self._die_event.isSet():
                 self._logger.debug('DIE event caught')
                 break
 
@@ -215,7 +243,7 @@ class IncomingDir(threading.Thread):
                             self._logger.debug('Removing "%s" from incoming queue after successful install.' % (changefilename,))
                             del self._reprocess_queue[changefilename]
                         except Exception, e:
-                            logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
+                            self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
                             fucked.append(changefilename)
                     else:
                         delay *= 2
@@ -249,7 +277,7 @@ class IncomingDir(threading.Thread):
                         try:
                             self._install_changefile(changefilename, changefile, doing_reprocess)
                         except Exception, e:
-                            logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
+                            self._logger.exception("Unable to install \"%s\"; adding to screwed list" % (changefilename,))
                             fucked.append(changefilename)
                     else:
                         curtime = time.time()
@@ -258,7 +286,7 @@ class IncomingDir(threading.Thread):
             if doing_reprocess:
                 doing_reprocess = 0
                 self._logger.info('Reprocessing complete')
-                reprocess_finished.set()
+                self.reprocess_finished.set()
 
     def wait(self):
         self._done_event.wait()

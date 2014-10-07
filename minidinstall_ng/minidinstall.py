@@ -31,7 +31,6 @@ from minidinstall_ng import config_types as types
 from minidinstall_ng.version import pkg_version
 from minidinstall_ng.osactions import OsActions
 import minidinstall_ng.pidlock as lock
-from minidinstall_ng import sockethandler
 import threading
 import logging
 import sys
@@ -117,19 +116,7 @@ class MiniDinstall(object):
         # I couldn't figure out any way to pass state to a BaseRequestHandler.
         self.die_event = threading.Event()
         self.reprocess_needed = threading.Event()
-        self.reprocess_finished = threading.Event()
         self.reprocess_lock = threading.Lock()
-
-    # -> to worker
-    # def _get_socket_server(self):
-    #     data = {}
-    #     data['logger'] = self.logger
-    #     data['die_event'] = self.die_event
-    #     Server = type('MyIncomingSocketServer', (sockethandler.RequestServer,), data)
-    #     data['reprocess_lock'] = self.reprocess_lock
-    #     data['reprocess_finished'] = self.reprocess_finished
-    #     Handler = type('MyIncomingRequestHandler', (sockethandler.IncomingRequestHandler,), data)
-    #     server = Server()
 
 
     def _config_paths(self, arguments):
