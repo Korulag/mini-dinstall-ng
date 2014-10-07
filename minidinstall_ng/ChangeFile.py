@@ -19,7 +19,11 @@
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
 import os, re, sys, string, stat
-import threading, Queue
+import threading
+try:
+    import queue
+except ImportError:
+    import Queue as queue
 import logging
 from minidinstall_ng import DpkgControl, SignedFile
 from minidinstall_ng import misc
@@ -28,7 +32,8 @@ class ChangeFileException(Exception):
     def __init__(self, value):
         self._value = value
     def __str__(self):
-        return `self._value`
+        # what was this??
+        return str(self._value)
 
 class ChangeFile(DpkgControl.DpkgParagraph):
     md5_re = r'^(?P<md5>[0-9a-f]{32})[ \t]+(?P<size>\d+)[ \t]+(?P<section>[-/a-zA-Z0-9]+)[ \t]+(?P<priority>[-a-zA-Z0-9]+)[ \t]+(?P<file>[0-9a-zA-Z][-+:.,=~0-9a-zA-Z_]+)$'
@@ -102,7 +107,7 @@ class ChangeFile(DpkgControl.DpkgParagraph):
             if not stat.S_ISREG(statbuf[stat.ST_MODE]):
                 raise ChangeFileException("%s is not a regular file" % (filename,))
             size = statbuf[stat.ST_SIZE]
-        except OSError, e:
+        except OSError as e:
             raise ChangeFileException("Can't stat %s: %s" % (filename,e.strerror))
         if size != expected_size:
             raise ChangeFileException("File size for %s does not match that specified in .dsc" % (filename,))

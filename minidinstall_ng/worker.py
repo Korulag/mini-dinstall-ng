@@ -249,7 +249,7 @@ class IncomingDir(threading.Thread):
                     self._reprocess_queue[changefilename] = (starttime, curtime + delay, delay)
 
 
-    def _daemonize(self, init_reprocess_queue, init_self.fucked_list):
+    def _daemonize(self, init_reprocess_queue, init_fucked):
         '''
         Enter the .. void?
         '''
@@ -266,7 +266,7 @@ class IncomingDir(threading.Thread):
         self._server.server_forever()
         retry_time = 30
         self._reprocess_queue = {}
-        self.fucked = init_self.fucked_list
+        self.fucked = init_fucked
         doing_reprocess = False
         # Initialize the reprocessing queue
         for changefilename in init_reprocess_queue:
