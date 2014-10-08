@@ -493,7 +493,7 @@ class ArchiveDir(DirHandler):
                         oldfiles.append((file, target))
                         continue
 
-        self._clean_targets = [x[1], oldfiles for x in newfiles]
+        self._clean_targets = [x[1] for x in oldfiles]
         allrenames = oldfiles + [x[:2] for x in newfiles]
         try:
             while not allrenames == []:
