@@ -113,7 +113,11 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
             if not codename:
                 codename = suite
             f.write('Codename: ' + '%s/%s\n' % (codename, arch))
+    
     def _write_releasefile(filename):
+        '''
+        Writes the release file to filename.
+        '''
         with open(filename, 'w') as f:
             f.write('Origin: ' + self.config.release_origin + '\n')
             f.write('Label: ' + self.config.release_label + '\n')
@@ -317,10 +321,10 @@ class ArchiveDir(DirHandler):
                 return False
         else:
             self.logger.debug('Skipping signature verification on "%s"' % changefilename)
-        if self._pre_install_script:
+        if self.config.pre_install_script:
             try:
-                self.logger.debug("Running pre-installation script: " + self._pre_install_script)
-                if self._run_script(os.path.abspath(changefilename), self._pre_install_script):
+                self.logger.debug("Running pre-installation script: " + self.config.pre_install_script)
+                if self._run_script(os.path.abspath(changefilename), self.config.pre_install_script):
                     return False
             except:
                 self.logger.exception("failure while running pre-installation script")
@@ -356,7 +360,7 @@ class ArchiveDir(DirHandler):
                 mail_body = mail_body + "\n\nMissing changefile fields: %s" % missing_fields
             minidinstall.mail.send(mail_server, 'Mini-Dinstall <%s@%s>' % (getpass.getuser(),socket.getfqdn()), mail_to, mail_body, mail_subject)
 
-        if self._tweet_on_success:
+        if self.config.tweet_on_success:
             done = False
             missing_fields = []
             if changefile.has_key('changes'):
@@ -374,10 +378,10 @@ class ArchiveDir(DirHandler):
                 tweet_body = tweet_body + "\n\n(errs: %s)" % missing_fields
             minidinstall.tweet.send(tweet_body, tweet_server, tweet_user, tweet_password)
 
-        if self._post_install_script:
+        if self.config.post_install_script:
             try:
-                self.logger.debug("Running post-installation script: " + self._post_install_script)
-                self._run_script(target, self._post_install_script)
+                self.logger.debug("Running post-installation script: " + self.config.post_install_script)
+                self._run_script(target, self.config.post_install_script)
             except:
                 self.logger.exception("failure while running post-installation script")
                 return False
@@ -481,16 +485,16 @@ class ArchiveDir(DirHandler):
                                 self.logger.debug('keeping upstream tarball "%s" version %s' % (file, oldupstreamver))
                                 continue
                         else:
-                                self.logger.debug('old native tarball "%s", tagging for deletion'  % file)
-                                oldfiles.append((file, target))
-                                continue
+                            self.logger.debug('old native tarball "%s", tagging for deletion'  % file)
+                            oldfiles.append((file, target))
+                            continue
                     match = debsrc_native_re.search(file)
                     if match and match.group(1) in map(lambda x: x[2], newfiles):
                         oldfiles.append((file, target))
                         continue
 
-        self._clean_targets = map(lambda x: x[1], oldfiles)
-        allrenames = oldfiles + map(lambda x: x[:2], newfiles)
+        self._clean_targets = [x[1], oldfiles for x in newfiles]
+        allrenames = oldfiles + [x[:2] for x in newfiles]
         try:
             while not allrenames == []:
                 (oldname, newname) = allrenames[0]
@@ -517,7 +521,7 @@ class ArchiveDir(DirHandler):
         incomingdir = os.path.dirname(changefilename)
         try:
             f = open(os.path.join(rejectdir, "%s_%s.reason" % (sourcename, version)), 'w')
-            if type(exception) == type('string'):
+            if type(exception) is str:
                 f.write(exception)
             else:
                 traceback.print_exception(Exception, exception, None, None, f)
