@@ -1,7 +1,38 @@
 import threading
 import subprocess
+import minidinstall_ng.hasher as hasher
 
-class ArchiveDirIndexer(threading.Thread):
+class DirHandler(object):
+    
+    def _run_script(self, changefilename, script, dir=None):
+        if not script:
+            raise TypeError('Script needed')
+        if not os.path.is_file(script) or not os.access(script, os.X_OK):
+            raise DinstallException("Script %s doesn't exist" % script)
+        script = os.path.expanduser(script)
+        cmd = script + ' ' + changefilename
+        self.logger.info('Running script \"%s\"' % cmd)
+        if not no_act:
+            pid = os.fork()
+            if pid == 0:
+                if not dir is None:
+                    os.chdir(dir)
+                os.execlp(script, script, changefilename)
+                sys.exit(1)
+            (pid, status) = os.waitpid(pid, 0)
+            if not (status is None or (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)):
+                self.logger.error("script \"%s\" exited with error code %d" % (cmd, os.WEXITSTATUS(status)))
+                return True
+        return False
+
+class ArchiveDirIndexer(DirHandler, threading.Thread):
+    '''
+    Basically calls apt-ftparchive on the distribution directory to create
+    the "Packages" and "Sources" files.
+    '''
+
+    hashes = [ 'md5', 'sha1', 'sha256' ]
+
     def __init__(self, dir, logger, config, use_dnotify=0, batch_mode=1):
         self.name = os.path.basename(os.path.abspath(dir))
         threading.Thread.__init__(self, name=self.name)
@@ -11,7 +42,7 @@ class ArchiveDirIndexer(threading.Thread):
         do_mkdir(dir)
         self.use_dnotify = use_dnotify
         self.batch_mode = batch_mode
-        self.done_event = threading.Event()
+        self.wait = self.join
 
     def _abspath(self, *args):
         return os.path.abspath(os.path.join(self.directory, *args))
@@ -28,42 +59,29 @@ class ArchiveDirIndexer(threading.Thread):
         self.logger.debug("Running: " + string.join(cmdline, ' '))
         if no_act:
             return
-        (infd, outfd) = os.pipe()
-        pid = os.fork()
-        if pid == 0:
-            os.chdir(os.path.join(self.directory, '..'))
-            os.close(infd)
-            misc.dup2(outfd, 1)
-            sys.stdout.flush()
-            os.execvp('apt-ftparchive', cmdline)
-            os._exit(1)
-        os.close(outfd)
-        packagesfilename = os.path.join(directory, name)
-        newpackagesfilename = packagesfilename + '.new'
-        zpackagesfilename = packagesfilename + '.gz'
-        bz2packagesfilename = packagesfilename + '.bz2'
+        proc = subprocess.Popen(cmdline, stdout=subprocess.PIPE)
+        packagesfilename = os.path.join(directory, name)        
         
         files = []
-        for ext, ftype in (('','.gz','.bz2'),(open, gzip.GzipFile, bz2.BZ2File)):	
-        	filename = packagesfilename+'.new'
-        	files.append(filename, ftype(filename, 'w'))
+        for ext, ftype in (('','.gz','.bz2'),(open, gzip.GzipFile, bz2.BZ2File)):   
+            filename = packagesfilename+'.new'
+            files.append(filename, ftype(filename, 'w'))
         
-        inpipe = os.fdopen(infd)
-        def _read():
-        	return inpipe.read(8192)
-        while iter(_read, ''):
-        	for file_, filename in files:
-    			file_.write(buf)
-        inpipe.close()
+        for line in iter(proc.stdout.readline, ''):
+            for file_, filename in files:
+                file_.write(line)
 
-        (pid, status) = os.waitpid(pid, 0)
-        if not (status is None or (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)):
-            raise DinstallException("apt-ftparchive exited with status code %d" % (status,))
+        out, err = proc.communicate()
+        if out != '':
+            raise RuntimeError('Printed after reading: %r' % out)
+        status = proc.wait()
+        map(lambda x: x.close(), files)
+        if status != 0:
+            raise DinstallException("apt-ftparchive exited with status code %d" % status)
 
         for file_, filename in files:
-        	file_.close()
-        	# move from file.new to file
-        	shutil.move(filename, filename[:-4])
+            # move from file.new to file
+            shutil.move(filename, filename[:-4])
 
     def _make_packagesfile(self, directory):
         self._make_indexfile(directory, 'packages', 'Packages')
@@ -72,84 +90,87 @@ class ArchiveDirIndexer(threading.Thread):
         self._make_indexfile(directory, 'sources', 'Sources')
 
     def _sign_releasefile(self, name, dir):
-        if self._release_signscript:
+        '''
+        Uses the configuration "release_signscript". If this script is set
+        it executes is from withing the directory.
+        '''
+        if self.config.release_signscript:
             try:
-                self.logger.debug("Running Release signing script: " + self._release_signscript)
-                if self._run_script(name, self._release_signscript, dir=dir):
+                self.logger.debug("Running Release signing script: " + self.config.release_signscript)
+                if self._run_script(name, self.config.release_signscript, dir=dir):
                     return None
             except:
-                self.logger.exception("failure while running Release signature script")
+                self.logger.exception("failure while running Release signing script")
                 return None
         return True
 
-    # Copied from ArchiveDir
-    def _run_script(self, changefilename, script, dir=None):
-        if script:
-            script = os.path.expanduser(script)
-            cmd = '%s %s' % (script, changefilename)
-            self.logger.info('Running \"%s\"' % (cmd,))
-            if not no_act:
-                if not os.access(script, os.X_OK):
-                    self.logger.error("Can't execute script \"%s\"" % (script,))
-                    return True
-                pid = os.fork()
-                if pid == 0:
-                    if dir:
-                        os.chdir(dir)
-                    os.execlp(script, script, changefilename)
-                    sys.exit(1)
-                (pid, status) = os.waitpid(pid, 0)
-                if not (status is None or (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)):
-                    self.logger.error("script \"%s\" exited with error code %d" % (cmd, os.WEXITSTATUS(status)))
-                    return True
-        return False
+    def _write_codename(filename):
+        suite = self.config.release_suite
+            if not suite:
+                suite = self.name
+            f.write('Suite: ' + suite + '\n')
+            codename = self.config.release_codename
+            if not codename:
+                codename = suite
+            f.write('Codename: ' + '%s/%s\n' % (codename, arch))
+    def _write_releasefile(filename):
+        with open(filename, 'w') as f:
+            f.write('Origin: ' + self.config.release_origin + '\n')
+            f.write('Label: ' + self.config.release_label + '\n')
+            suite = self.config.release_suite
+            if not suite:
+                suite = self.name
+            f.write('Suite: ' + suite + '\n')
+            codename = self.config.release_codename
+            if not codename:
+                codename = suite
+            f.write('Codename: ' + '%s/%s\n' % (codename, arch))
+            if self._experimental_release:
+                f.write('NotAutomatic: yes\n')
+            f.write('Date: ' + time.strftime("%a, %d %b %Y %H:%M:%S UTC", time.gmtime()) + '\n')
+            f.write('Architectures: ' + arch + '\n')
+            if self._release_description:
+                f.write('Description: ' + self._release_description + '\n')
+            self._hash_files_to(indexfiles, f)
 
-    def _get_file_sum(self, type, filename):
-        ret = misc.get_file_sum(self, type, filename)
-        if ret:
-            return ret
-        else:
-            raise DinstallException('cannot compute hash of type %s; no builtin method or /usr/bin/%ssum', type, type)
 
-    def _do_hash(self, hash, indexfiles, f):
-        """
+    def _hash_files_to(self, indexfiles, f):
+        '''
         write hash digest into filehandle
-
-        @param hash: used hash algorithm
-        @param indexfiles: system architectures
-        @param f: file handle
-        """
-        f.write("%s%s:\n" % (hash.upper(), ['', 'Sum'][hash == 'md5']))
-        for file in indexfiles:
-            absfile = self._abspath(file)
-            h = self._get_file_sum(hash, absfile)
-            size = os.stat(absfile)[stat.ST_SIZE]
-            f.write(' %s% 16d %s\n' % (h, size, os.path.basename(absfile)))
-
-    def _index_all(self, force=None):
-        self._index(self._arches + ['source'], force)
+        :param indexfiles: system architectures
+        :param f: file handle
+        '''        
+        for hash_ in self.hashes:
+            f.write("%s%s:\n" % (hash_.upper() + ('Sum' if hash_ == 'md5' else '')))
+            for filename in indexfiles:
+                filename = self._abspath(filename)
+                hexhash = hasher.hash_file(filename, hash_)
+                size = os.stat(filename).st_size
+                filename = os.path.basename(filename)
+                f.write(' %s% 16d %s\n' % (hexhash, size, filename))             
+    
+    def _index_all(self, force=False):
+        self._index(self.config.arches + ['source'], force=force)
 
     def _gen_release_all(self, force=False):
-        self._gen_release(self._arches, force)
+        self._gen_release(self.config.arches, force)
 
     def run(self):
         self.logger.info('Created new thread (%s) for archive indexer %s' % (self.getName(), self.name,))
         self.logger.info('Entering batch mode...')
         try:
-            self._index_all(1)
-            self._gen_release_all(True)
+            self._index_all(force=True)
+            self._gen_release_all(force=True)
             if not self.batch_mode:
                 # never returns
                 self._daemonize()
-            self.done_event.set()
-        except Exception, e:
+        except Exception as e:
             self.logger.exception("Unhandled exception; shutting down")
-            die_event.set()
-            self.done_event.set()
+            self.die_event.set()
         self.logger.info('Thread \"%s\" exiting' % (self.getName(),))
 
     def _daemon_event_ispending(self):
-        return die_event.isSet() or (not self._eventqueue.empty())
+        return self.die_event.isSet() or (not self._eventqueue.empty())
     
     def _daemonize(self):
         self.logger.info('Entering daemon mode...')
@@ -173,33 +194,33 @@ class ArchiveDirIndexer(threading.Thread):
             setevent = None
             dir = None
             obj = self._eventqueue.get()
-            if type(obj) == type(''):
+            if type(obj) == str:
                 self.logger.debug('got dir change')
                 dir = obj
-            elif type(obj) == type(None):
+            elif obj is None:
                 self.logger.debug('got general event')
                 setevent = None
-            elif obj.__class__ == threading.Event().__class__:
+            elif type(obj) == threading._Event:
                 self.logger.debug('got wait_reprocess event')
                 setevent = obj
             else:
-                self.logger.error("unknown object %s in event queue" % (obj,))
+                self.logger.error("unknown object %s in event queue" % obj)
                 assert None
 
             # This is to protect against both lots of activity, and to
             # prevent race conditions, so we can rely on timestamps.
             time.sleep(1)
             if not self._reindex_needed():
-                if setevent:
+                if not setevent is None:
                     self.logger.debug('setting wait_reprocess event')
                     setevent.set()
                 continue
             if dir is None:
                 self.logger.debug('Got general change')
-                self._index_all(1)
+                self._index_all(force=True)
                 self._gen_release_all(True)
             else:
-                self.logger.debug('Got change in %s' % (dir,))
+                self.logger.debug('Got change in %s' % dir)
                 self._index([os.path.basename(os.path.abspath(dir))])
                 self._gen_release([os.path.basename(os.path.abspath(dir))])
             if setevent:
@@ -207,22 +228,22 @@ class ArchiveDirIndexer(threading.Thread):
                 setevent.set()
 
     def _reindex_needed(self):
-        reindex_needed = 0
+        reindex_needed = False
         if os.access(self._abspath('Release.gpg'), os.R_OK):
             gpg_mtime = os.stat(self._abspath('Release.gpg'))[stat.ST_MTIME]
             for dir in self._get_dnotify_dirs():
                 dir_mtime = os.stat(self._abspath(dir))[stat.ST_MTIME]
                 if dir_mtime > gpg_mtime:
-                    reindex_needed = 1
+                    reindex_needed = True
         else:
-            reindex_needed = 1
+            reindex_needed = True
         return reindex_needed
 
     def _index(self, arches, force=None):
         self._index_impl(arches, force=force)
 
     def _gen_release(self, arches, force=False):
-        self._gen_release_impl(self._arches, force)
+        self._gen_release_impl(self.config.arches, force)
 
     def wait_reprocess(self):
         e = threading.Event()
@@ -232,15 +253,12 @@ class ArchiveDirIndexer(threading.Thread):
             time.sleep(0.5)
         self.logger.debug('done waiting on reprocess')
 
-    def wait(self):
-        self.done_event.wait()
-
     def notify(self):
         self._eventqueue.put(None)
 
-class ArchiveDir:
+class ArchiveDir(DirHandler):
 
-	indexer_class = ArchiveDirIndexer
+    indexer_class = ArchiveDirIndexer
 
     def __init__(self, dir, logger, config, batch_mode=0):
         self.directory = dir
@@ -380,7 +398,7 @@ class ArchiveDir:
             match = debpackage_re.search(file)
             if match:
                 arch = match.group(3)
-                if not arch in self._arches:
+                if not arch in self.config.arches:
                     raise DinstallException("Unknown architecture: %s" % (arch))
                 target = self._arch_target(arch, file)
                 newfiles.append((os.path.join(incomingdir, file), target, match.group(1), arch))
@@ -463,7 +481,7 @@ class ArchiveDir:
                                 self.logger.debug('keeping upstream tarball "%s" version %s' % (file, oldupstreamver))
                                 continue
                         else:
-                                self.logger.debug('old native tarball "%s", tagging for deletion'  % (file,))
+                                self.logger.debug('old native tarball "%s", tagging for deletion'  % file)
                                 oldfiles.append((file, target))
                                 continue
                     match = debsrc_native_re.search(file)
@@ -493,25 +511,6 @@ class ArchiveDir:
         # remove old files
         self.clean()
 
-    def _run_script(self, changefilename, script):
-        if script:
-            script = os.path.expanduser(script)
-            cmd = '%s %s' % (script, changefilename)
-            self.logger.info('Running \"%s\"' % (cmd,))
-            if not no_act:
-                if not os.access(script, os.X_OK):
-                    self.logger.error("Can't execute script \"%s\"" % (script,))
-                    return True
-                pid = os.fork()
-                if pid == 0:
-                    os.execlp(script, script, changefilename)
-                    sys.exit(1)
-                (pid, status) = os.waitpid(pid, 0)
-                if not (status is None or (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)):
-                    self.logger.error("script \"%s\" exited with error code %d" % (cmd, os.WEXITSTATUS(status)))
-                    return True
-        return False
-
     def _reject_changefile(self, changefilename, changefile, exception):
         sourcename = changefile['source']
         version = changefile['version']
@@ -539,5 +538,5 @@ class ArchiveDir:
     def clean(self):
         self.logger.debug('Removing old files')
         for file in self._clean_targets:
-            self.logger.debug('Deleting "%s"' % (file,))
+            self.logger.debug('Deleting "%s"' % file)
                 os.unlink(file)

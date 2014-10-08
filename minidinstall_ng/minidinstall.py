@@ -241,7 +241,7 @@ class MiniDinstall(object):
                 os._exit(0)
             self.logger.debug("Finished daemonizing (pid %s)" % (os.getpid(),))
         
-
+        
 
         if daemonize:
             self.logger.debug('waiting for die event')

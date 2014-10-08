@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-# SignedFile -*- mode: python; coding: utf-8 -*-
+# incom_worker -*- mode: python; coding: utf-8 -*-
 #-----------------------------------------------------------------------------
 '''
-
 This code was originally written by Colin Alters <walters@gnu.org>. So give
 him the credits and blame me <l34k@bk.ru> for bugs.
 '''

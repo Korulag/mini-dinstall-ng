@@ -127,6 +127,7 @@ class ConfigHandler(object):
             raise KeyError('No distribution %r' % name)
         return self._mappers[name]
 
+
     # def __setitem__(self, name, value):
     #     if name == 'all':
     #         name = configparser.DEFAULTSECT
