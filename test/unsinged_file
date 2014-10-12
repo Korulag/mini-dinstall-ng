@@ -1,0 +1,3 @@
+RUN = 'RUN'
+DIE = 'DIE'
+COMMANDS = (RUN, DIE)
