@@ -91,28 +91,33 @@ class MtimeDirectoryNotifier(DirectoryNotifier):
         self._dirmap = {}
         self._polltime = poll_time
         for dir in dirs:
-            self._dirmap[dir] = os.stat(os.path.join(self._cwd, dir))[stat.ST_MTIME]
+            self._dirmap[dir] = os.stat(os.path.join(self._cwd, dir)).st_mtime
     
     def poll(self, timeout=None):
         timeout_time = None
         if timeout:
             timeout_time = time.time() + timeout
-        while self._changed == []:
+        while not self._changed:
             if timeout_time and time.time() > timeout_time:
                 return None
             self._logger.debug('Polling...')
             for dir in self._dirmap.keys():
                 oldtime = self._dirmap[dir]
-                mtime = os.stat(os.path.join(self._cwd, dir))[stat.ST_MTIME]
+                mtime = os.stat(os.path.join(self._cwd, dir)).st_mtime
                 if oldtime < mtime:
                     self._logger.debug('Directory "%s" has changed' % (dir,))
                     self._changed.append(dir)
                 self._dirmap[dir] = mtime
             if self._changed == []:
-                for x in range(self._polltime):
+                tmp_poll_time = self._polltime
+                while tmp_poll_time > 0:
                     if self._cancel_event.isSet():
                         return None
-                    time.sleep(1)
+                    if tmp_poll_time > 1:
+                        wait = 1
+                    else:
+                        wait = tmp_poll_time
+                    tmp_poll_time -= 1
         ret = self._changed[0]
         self._changed = self._changed[1:]
         return ret

@@ -7,12 +7,12 @@ class SimpleSubdirArchiveDirIndexer(ArchiveDirIndexer):
             target = os.path.join(self._dir, arch)
             do_mkdir(target)
 
-    def _index_impl(self, arches, force=None):
+    def _index(self, arches, force=None):
         for arch in arches:
-            dirmtime = os.stat(self._relpath(arch))[stat.ST_MTIME]
+            dirmtime = os.stat(self._relpath(arch)).st_mtime
             if arch != 'source':
                 pkgsfile = self._relpath(arch, 'Packages')
-                if force or (not os.access(pkgsfile, os.R_OK)) or dirmtime > os.stat(pkgsfile)[stat.ST_MTIME]:
+                if force or (not os.access(pkgsfile, os.R_OK)) or dirmtime > os.stat(pkgsfile).st_mtime:
                     self._logger.info('Generating Packages file for %s...' % (arch,))
                     self._make_packagesfile(self._relpath(arch))
                     self._logger.info('Packages generation complete')
@@ -21,52 +21,50 @@ class SimpleSubdirArchiveDirIndexer(ArchiveDirIndexer):
 
             else:
                 pkgsfile = self._relpath(arch, 'Sources')
-                if force or (not os.access(pkgsfile, os.R_OK)) or dirmtime > os.stat(pkgsfile)[stat.ST_MTIME]:
+                if force or (not os.access(pkgsfile, os.R_OK)) or dirmtime > os.stat(pkgsfile).st_mtime:
                     self._logger.info('Generating Sources file for %s...' % (arch,))
                     self._make_sourcesfile(self._relpath('source'))
                     self._logger.info('Sources generation complete')
                 else:
                     self._logger.info('Skipping generation of Sources file for %s' % (arch,))
 
-    def _gen_release_impl(self, arches, force):
+    def _gen_release(self, arches, force):
         for arch in arches:
-            targetname = self._relpath(arch, 'Release')
+            release_file = self._relpath(arch, 'Release')
             if not self._generate_release:
-                if os.access(targetname, os.R_OK):
+                if os.access(release_file, os.R_OK):
                     self._logger.info("Release generation disabled, removing existing Release file")
                     try:
-                        os.unlink(targetname)
+                        os.unlink(release_file)
                     except OSError, e:
                         pass
                 return
-            tmpname = targetname + tmp_new_suffix
-            release_needed = 0
-            uncompr_indexfile = os.path.join(arch, 'Packages')
-            indexfiles =  [uncompr_indexfile]
-            comprexts = ['.gz', '.bz2']
-            for ext in comprexts:
-                indexfiles = indexfiles + [uncompr_indexfile + ext]
-            if os.access(targetname, os.R_OK):
-                release_mtime = os.stat(targetname)[stat.ST_MTIME]
-                for file in indexfiles:
-                    if release_needed:
-                        break
-                if os.stat(self._abspath(file))[stat.ST_MTIME] > release_mtime:
-                    release_needed = 1
-            else:
-                release_needed = 1
-
-            if not release_needed:
+            tmp_release_file = release_file + tmp_new_suffix
+            if not self.release_needed:
                 self._logger.info("Skipping Release generation")
                 continue
             self._logger.info("Generating Release...")
             if no_act:
                 self._logger.info("Release generation complete")
                 return
-            self._write_releasefile(tmpname)
+            f = open(tmp_release_file, 'w')
+            self._write_origin_to(f)
+            self._write_label_to(f)
+            self._write_suite_to(f)
 
-            if self._sign_releasefile(os.path.basename(tmpname), self._abspath(arch)):
-                os.rename(tmpname, targetname)
+            codename = self._release_codename
+            if not codename:
+                codename = suite
+            f.write('Codename: ' + '%s/%s\n' % (codename, arch))
+            self._write_no_automatic_to(f)
+            self._write_date_to(f)
+            f.write('Architectures: ' + arch + '\n')
+            if self._release_description:
+                f.write('Description: ' + self._release_description + '\n')
+            self._hash_files_to(indexfiles, f)
+            f.close()
+            if self._sign_releasefile(os.path.basename(tmp_release_file), self._abspath(arch)):
+                os.rename(tmp_release_file, release_file)
                 self._logger.info("Release generation complete")
 
     def _in_archdir(self, *args):
@@ -75,8 +73,8 @@ class SimpleSubdirArchiveDirIndexer(ArchiveDirIndexer):
     def _get_dnotify_dirs(self):
         return map(lambda x, self=self: self._abspath(x), self._arches + ['source'])
 
-    def _get_all_indexfiles(self):
-        return map(lambda arch: os.path.join(arch, 'Packages'), self._arches) + ['source/Sources']
+    def _get_uncompressed_indexfiles(self):
+        return [os.path.join(arch, 'Packages') for arch in self._arches] + ['source/Sources']
 
 
 class SimpleSubdirArchiveDir(ArchiveDir):

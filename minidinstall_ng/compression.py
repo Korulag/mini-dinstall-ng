@@ -28,7 +28,7 @@ import lzma
 class MultiCompressedFile(object):
 	filetypes = {
 		'': open,
-		'.gz': gzip.open	,
+		'.gz': gzip.open,
 		'.bz2': bz2.open,
 		'.xz': lzma.open
 	}

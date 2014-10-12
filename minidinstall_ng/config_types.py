@@ -1,6 +1,12 @@
 import logging
 
 class StrList:
+    '''
+    A string containing multiple object seperated by a defined
+    *seperator* (by default a comma ',').
+    :param strip: Remove all leading and trailing whitespaced.
+    :param type: Apply another type to each object.
+    '''
     def __init__(self, seperator=',', strip=True, type=None):
         self._type = type
         self._sep = seperator

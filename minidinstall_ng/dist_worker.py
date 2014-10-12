@@ -1,7 +1,8 @@
 import threading
 import subprocess
 import minidinstall_ng.hasher as hasher
-
+import os
+import minidinstall_ng.compression
 class DirHandler(object):
     
     def _run_script(self, changefilename, script, dir=None):
@@ -12,7 +13,7 @@ class DirHandler(object):
         script = os.path.expanduser(script)
         cmd = script + ' ' + changefilename
         self.logger.info('Running script \"%s\"' % cmd)
-        if not no_act:
+        if not self.no_act:
             pid = os.fork()
             if pid == 0:
                 if not dir is None:
@@ -21,7 +22,7 @@ class DirHandler(object):
                 sys.exit(1)
             (pid, status) = os.waitpid(pid, 0)
             if not (status is None or (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)):
-                self.logger.error("script \"%s\" exited with error code %d" % (cmd, os.WEXITSTATUS(status)))
+                self.logger.error('script "%s" exited with error code %d' % (cmd, os.WEXITSTATUS(status)))
                 return True
         return False
 
@@ -43,6 +44,8 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
         self.use_dnotify = use_dnotify
         self.batch_mode = batch_mode
         self.wait = self.join
+        self._reindex_needed_event = threading.Event()
+        self._release_needed_event = threading.Event()
 
     def _abspath(self, *args):
         return os.path.abspath(os.path.join(self.directory, *args))
@@ -62,24 +65,20 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
         proc = subprocess.Popen(cmdline, stdout=subprocess.PIPE)
         packagesfilename = os.path.join(directory, name)        
         
-        files = []
-        for ext, ftype in (('','.gz','.bz2'),(open, gzip.GzipFile, bz2.BZ2File)):   
-            filename = packagesfilename+'.new'
-            files.append(filename, ftype(filename, 'w'))
-        
-        for line in iter(proc.stdout.readline, ''):
-            for file_, filename in files:
-                file_.write(line)
-
+        with compression.MultiCompressedFile(packagesfilename+'.new', 'wt') as indexfiles
+            for line in iter(proc.stdout.readline, ''):
+                for file_, filename in files:
+                    file_.write(line)
         out, err = proc.communicate()
         if out != '':
             raise RuntimeError('Printed after reading: %r' % out)
         status = proc.wait()
-        map(lambda x: x.close(), files)
+        # close all files
+        map(lambda x: x[0].close(), files)
         if status != 0:
             raise DinstallException("apt-ftparchive exited with status code %d" % status)
 
-        for file_, filename in files:
+        for filename in indexfiles.filenames:
             # move from file.new to file
             shutil.move(filename, filename[:-4])
 
@@ -113,30 +112,6 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
             if not codename:
                 codename = suite
             f.write('Codename: ' + '%s/%s\n' % (codename, arch))
-    
-    def _write_releasefile(filename):
-        '''
-        Writes the release file to filename.
-        '''
-        with open(filename, 'w') as f:
-            f.write('Origin: ' + self.config.release_origin + '\n')
-            f.write('Label: ' + self.config.release_label + '\n')
-            suite = self.config.release_suite
-            if not suite:
-                suite = self.name
-            f.write('Suite: ' + suite + '\n')
-            codename = self.config.release_codename
-            if not codename:
-                codename = suite
-            f.write('Codename: ' + '%s/%s\n' % (codename, arch))
-            if self._experimental_release:
-                f.write('NotAutomatic: yes\n')
-            f.write('Date: ' + time.strftime("%a, %d %b %Y %H:%M:%S UTC", time.gmtime()) + '\n')
-            f.write('Architectures: ' + arch + '\n')
-            if self._release_description:
-                f.write('Description: ' + self._release_description + '\n')
-            self._hash_files_to(indexfiles, f)
-
 
     def _hash_files_to(self, indexfiles, f):
         '''
@@ -151,13 +126,35 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
                 hexhash = hasher.hash_file(filename, hash_)
                 size = os.stat(filename).st_size
                 filename = os.path.basename(filename)
-                f.write(' %s% 16d %s\n' % (hexhash, size, filename))             
+                f.write(' %s% 16d %s\n' % (hexhash, size, filename))    
+
+    def _write_suite_to(f):
+        suite = self.config.release_suite
+        if not suite:
+            suite = self.config.name
+        f.write('Suite: ' + suite + '\n')
+
+    def _write_origin_to(f):
+        f.write('Origin: ' + self.config.release_origin + '\n')
     
+    def _write_label_to(f):
+        f.write('Label: ' + self.config.release_label + '\n')
+
+    def _write_date_to(f):
+        f.write('Date: ' + time.strftime("%a, %d %b %Y %H:%M:%S UTC", time.gmtime()) + '\n')
+
+    def _write_no_automatic_to(f):
+        if self.config.experimental_release:
+            f.write('NotAutomatic: yes\n')
+
     def _index_all(self, force=False):
         self._index(self.config.arches + ['source'], force=force)
 
     def _gen_release_all(self, force=False):
         self._gen_release(self.config.arches, force)
+
+    def _gen_release(self, arches, force=False):
+        raise NotImplementedError()
 
     def run(self):
         self.logger.info('Created new thread (%s) for archive indexer %s' % (self.getName(), self.name,))
@@ -185,19 +182,22 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
             self._async_dnotify.start()
 
         # The main daemon loop
-        while 1:
-
-            # Wait until we have a pending event
-            while not self._daemon_event_ispending():
-                time.sleep(1)
-
-            if die_event.isSet():
-                break
+        while True:
+            try:
+                # wait 1 second for a new event
+                obj = self._eventqueue.get(1)
+            except queue.Empty:
+                continue
+            finally:
+                if die_event.is_set():
+                    # don't worry this break is stronger
+                    # then the continue above
+                    break
 
             self.logger.debug('Reading from event queue')
             setevent = None
             dir = None
-            obj = self._eventqueue.get()
+            
             if type(obj) == str:
                 self.logger.debug('got dir change')
                 dir = obj
@@ -214,44 +214,64 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
             # This is to protect against both lots of activity, and to
             # prevent race conditions, so we can rely on timestamps.
             time.sleep(1)
-            if not self._reindex_needed():
-                if not setevent is None:
-                    self.logger.debug('setting wait_reprocess event')
-                    setevent.set()
-                continue
-            if dir is None:
-                self.logger.debug('Got general change')
-                self._index_all(force=True)
-                self._gen_release_all(True)
-            else:
-                self.logger.debug('Got change in %s' % dir)
-                self._index([os.path.basename(os.path.abspath(dir))])
-                self._gen_release([os.path.basename(os.path.abspath(dir))])
+            if self.reindex_needed:
+                if dir is None:
+                    self.logger.debug('Got general change')
+                    self._index_all(force=True)
+                    self._gen_release_all(True)
+                else:
+                    self.logger.debug('Got change in %s' % dir)
+                    self._index([os.path.basename(os.path.abspath(dir))])
+                    self._gen_release([os.path.basename(os.path.abspath(dir))])
+            
             if setevent:
                 self.logger.debug('setting wait_reprocess event')
                 setevent.set()
 
-    def _reindex_needed(self):
-        reindex_needed = False
-        if os.access(self._abspath('Release.gpg'), os.R_OK):
-            gpg_mtime = os.stat(self._abspath('Release.gpg'))[stat.ST_MTIME]
-            for dir in self._get_dnotify_dirs():
-                dir_mtime = os.stat(self._abspath(dir))[stat.ST_MTIME]
-                if dir_mtime > gpg_mtime:
-                    reindex_needed = True
-        else:
-            reindex_needed = True
-        return reindex_needed
-
     def _index(self, arches, force=None):
-        self._index_impl(arches, force=force)
+        raise NotImplementedError()
 
-    def _gen_release(self, arches, force=False):
-        self._gen_release_impl(self.config.arches, force)
+    def _get_uncompressed_indexfiles(self):
+        raise NotImplementedError()
+
+    def _get_uncompressed_indexfiles(self):
+        for ext in compression.MultiCompressedFile.filetypes.keys():
+            for filename in self._get_uncompressed_indexfiles():
+                yield filename + ext
+
+    def _get_release_needed(self,  release_file):
+        if not os.path.isfile(release_file):
+            # release file is missing
+            return True    
+        if self._release_needed_event.is_set():
+            return True
+        release_mtime = os.stat( release_file).st_mtime
+        for indexfile in self._get_all_indexfiles():
+            if os.stat(self._abspath(indexfile)).st_mtime > release_mtime:
+                # one of the index files are newer than
+                # the release file
+                return True
+        return False
+
+    release_needed = property(_get_release_needed)
+
+    def _get_reindex_needed(self):
+        if not os.path.isfile(self._abspath('Release')):
+            return True
+        if self._reindex_needed_event.is_set():
+            return True
+        gpg_mtime = os.stat(self._abspath('Release')).st_mtime
+        for dir in self._get_dnotify_dirs():
+            dir_mtime = os.stat(self._abspath(dir)).st_mtime
+            if dir_mtime > gpg_mtime:
+                return True
+        return False
+
+    reindex_needed = property(_get_reindex_needed)
 
     def wait_reprocess(self):
         e = threading.Event()
-        self._eventqueue.put(e)
+        self._evenytqueue.put(e)
         self.logger.debug('waiting on reprocess')
         while not (e.isSet() or die_event.isSet()):
             time.sleep(0.5)
@@ -288,6 +308,9 @@ class ArchiveDir(DirHandler):
         return os.path.join(self.name, *args)
 
     def install(self, changefilename, changefile):
+        '''
+        Install a changefile.
+        '''
         success = False
         try:
             success = self._install_run_scripts(changefilename, changefile)

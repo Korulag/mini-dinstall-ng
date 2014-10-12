@@ -260,6 +260,7 @@ class IncomingDir(threading.Thread):
         '''
         The actual thread functionality.
         '''
+        self._worker.start()
         self._logger.info('Created new installer thread (%s)' % (self.getName(),))
         self._logger.info('Entering batch mode...')
         try:
