@@ -109,12 +109,12 @@ class MtimeDirectoryNotifier(DirectoryNotifier):
                     self._changed.append(dir)
                 self._dirmap[dir] = mtime
             if self._changed == []:
-                tmp_poll_time = self._polltime
-                while tmp_poll_time > 0:
+                tmp_poll_time = self._polltime
+                while tmp_poll_time > 0:
                     if self._cancel_event.isSet():
                         return None
-                    if tmp_poll_time > 1:
-                        wait = 1
+                    if tmp_poll_time > 1:
+                        wait = 1
                     else:
                         wait = tmp_poll_time
                     tmp_poll_time -= 1

@@ -34,11 +34,11 @@ show that field.
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
-__all__ = ['DpkgParagraph', 'DpkgControl', 'DpkgSourceControl']
+__all__ = ['DpkgParagraph', 'DpkgControl', 'DpkgSourceControl']
 
 import sys
 from DpkgDatalist import *
-from minidinstall_ng.SignedFile import *
+from minidinstall.SignedFile import *
 from types import ListType
 
 class DpkgParagraph(DpkgOrderedDatalist):
@@ -48,7 +48,7 @@ class DpkgParagraph(DpkgOrderedDatalist):
     def __init__(self, *args, **kwargs):
         DpkgOrderedDatalist.__init__(self, *args, **kwargs)
 
-        #: This dictionary is only needed when using
+        #: This dictionary is only needed when using
         #: :attr:`case_sensitive` set to :const:`False`.
         #: Then here are stored the real cased keys
         self.trueFieldCasing = {}
@@ -62,7 +62,7 @@ class DpkgParagraph(DpkgOrderedDatalist):
     def load(self, f):
         '''
         Read paragraph data from a file object.
-        :param f: A file like object with the method f.readline()
+        :param f: A file like object with the method f.readline()
         '''
         key = None
         value = None
@@ -82,22 +82,22 @@ class DpkgParagraph(DpkgOrderedDatalist):
             line = line[:-1]
             if line[0] != ' ':
                 splited = line.split(":", 1)
-                if len(splited) != 2:
+                if len(splited) != 2:
                     # FIXME: raise some error
                     pass
-                key, value = splited
+                key, value = splited
                 if value:
                     value = value.strip()
                 if not self.case_sensitive:
-                    newkey = string.lower(key)
+                    newkey = key.lower()
                     # FIXME: why check if it containes "key" and not "newkey"?
                     if not key in self.trueFieldCasing:
                         self.trueFieldCasing[newkey] = key
                     key = newkey
             else:
                 # continued line
-                if not type(value) == list:
-                    value = [value]
+                if not type(value) == list:
+                    value = [value]
                 value.append(line[1:])
 
             self[key] = value
@@ -113,7 +113,7 @@ class DpkgParagraph(DpkgOrderedDatalist):
         else:
             if value:
                 value = lead + str(value)
-        f.write(value + '\n')
+        f.write(value + '\n')
 
     def _store(self, f):
         '''
@@ -124,16 +124,28 @@ class DpkgParagraph(DpkgOrderedDatalist):
         for key, value in self.items():
             if key in self.trueFieldCasing:
                 key = self.trueFieldCasing[key]
-            f.write(str(key) + ":" )
+            f.write(str(key) + ":" )
             self._storeField(f, value)
 
 class DpkgControl(DpkgOrderedDatalist):
 
     key = "package"
+    case_sensitive = False
+
+    def setkey( self, key ):
+        self.key = key
+    
+    def setcase_sensitive( self, value ):
+        self.case_sensitive = value
+
+    def _load_one( self, f ):
+        '''
+        Loads the next :class:`DpkgParagraph̀` from 
+        file and returns it.
         :param f: Filehandle
         '''
         p = DpkgParagraph(None)
-        p.case_sensitive = self.case_sensitive
+        p.case_sensitive = self.case_sensitive
         p.load(f)
         return p
 

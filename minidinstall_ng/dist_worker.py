@@ -44,8 +44,8 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
         self.use_dnotify = use_dnotify
         self.batch_mode = batch_mode
         self.wait = self.join
-        self._reindex_needed_event = threading.Event()
-        self._release_needed_event = threading.Event()
+        self._reindex_needed_event = threading.Event()
+        self._release_needed_event = threading.Event()
 
     def _abspath(self, *args):
         return os.path.abspath(os.path.join(self.directory, *args))
@@ -237,7 +237,7 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
     def _get_uncompressed_indexfiles(self):
         for ext in compression.MultiCompressedFile.filetypes.keys():
             for filename in self._get_uncompressed_indexfiles():
-                yield filename + ext
+                yield filename + ext
 
     def _get_release_needed(self,  release_file):
         if not os.path.isfile(release_file):
@@ -253,7 +253,7 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
                 return True
         return False
 
-    release_needed = property(_get_release_needed)
+    release_needed = property(_get_release_needed)
 
     def _get_reindex_needed(self):
         if not os.path.isfile(self._abspath('Release')):
@@ -267,7 +267,7 @@ class ArchiveDirIndexer(DirHandler, threading.Thread):
                 return True
         return False
 
-    reindex_needed = property(_get_reindex_needed)
+    reindex_needed = property(_get_reindex_needed)
 
     def wait_reprocess(self):
         e = threading.Event()
